@@ -4,7 +4,7 @@
 import type {
   AgentInstruction, BrandKit, Character, ExecutionMode, Generation, GenerationSubmitRequest,
   GenerationSubmitResponse, HealthResponse, ModelDefinition,
-  Project, StudioConfig, TaskStatusEvent, WorkloadEstimate,
+  Project, StoryBreakdownRequest, StoryBreakdownResponse, StudioConfig, TaskStatusEvent, WorkloadEstimate,
 } from '../types/studio';
 
 class ApiError extends Error {
@@ -129,6 +129,11 @@ export const apiClient = {
     }),
   deleteAgentInstruction: (id: string) =>
     request<{ status: string; id: string }>(`/api/agent-instructions/${id}`, { method: 'DELETE' }),
+  breakdownStory: (payload: StoryBreakdownRequest) =>
+    request<StoryBreakdownResponse>('/api/story-director/breakdown', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   deleteGeneration: (id: string) =>
     request<{ status: string; id: string }>(`/api/generations/${id}`, { method: 'DELETE' }),
   cancelTask: (taskId: string) =>

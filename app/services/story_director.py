@@ -192,7 +192,7 @@ def build_chained_segment_prompt(
             arch = c.get("archetype")
             anchors = c.get("visualAnchors")
             line = f"- {lbl}"
-            if arch:
+            if arch and str(arch).strip() not in ("", "None", "null"):
                 line += f" ({arch})"
             if desc:
                 line += f": {desc}"
@@ -239,7 +239,13 @@ def build_chained_segment_prompt(
 
 def parse_explicit_script_segments(prompt_text: str) -> tuple[str, list[str]]:
     """Analyse si un prompt contient déjà des plans numérotés ou horodatés."""
-    lines = [line.strip() for line in prompt_text.strip().splitlines() if line.strip()]
+    # Normaliser les plans en ligne unique en lignes distinctes
+    norm_text = re.sub(
+        r"(?i)(?<=[^\n])\s+(?=(?:plan|shot|segment|sc[eè]ne|clip|partie)\s*\d+\s*[:\-–—\.])",
+        "\n",
+        prompt_text.strip(),
+    )
+    lines = [line.strip() for line in norm_text.splitlines() if line.strip()]
     if len(lines) <= 1:
         return prompt_text.strip(), []
 

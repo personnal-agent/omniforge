@@ -24,6 +24,7 @@ from app.api.routes_mcp import router as mcp_router
 from app.api.routes_models import get_worker_gateway
 from app.api.routes_models import router as models_router
 from app.api.routes_sqlite_resources import router as resources_router
+from app.api.routes_story_director import router as story_director_router
 from app.config import DATA_DIR, GENERATIONS_FILE, ensure_directories
 from app.models.domain import TaskStatus
 from app.services.system_info import get_host_system_metrics
@@ -98,6 +99,7 @@ app.include_router(generation_router)
 app.include_router(llm_proxy_router)
 app.include_router(mcp_router)
 app.include_router(resources_router)
+app.include_router(story_director_router)
 
 
 @app.get("/api/health", tags=["Diagnostic"])

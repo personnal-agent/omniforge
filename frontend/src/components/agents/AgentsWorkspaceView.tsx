@@ -23,13 +23,16 @@ import {
 } from 'lucide-react';
 import type {
   CanvasAssetLayer,
+  GenerationParameters,
   GenerationSubmitRequest,
   GenerationSubmitResponse,
   ModelDefinition,
+  StorySegmentResponse,
   TaskStatusEvent,
 } from '../../types/studio';
 import { detectGraphicsCapability } from '../../services/graphicsCapability';
 import { Canvas2DFallback } from '../canvas/Canvas2DFallback';
+import { StoryboardTimeline } from '../canvas/StoryboardTimeline';
 import { apiClient } from '../../services/apiClient';
 
 interface AgentMessage {
@@ -45,6 +48,8 @@ export interface MediaIntent {
   modelId: string;
   modelName: string;
   prompt: string;
+  durationSec?: number;
+  characterIds?: string[];
 }
 
 function detectMediaIntent(text: string): MediaIntent | null {
@@ -161,6 +166,12 @@ export const AgentsWorkspaceView: FC<AgentsWorkspaceViewProps> = ({
   const [isGenerating3D, setIsGenerating3D] = useState(false);
   const [graphicsMode, setGraphicsMode] = useState<'webgpu' | 'canvas2d'>('webgpu');
   const [gpuInfo, setGpuInfo] = useState<string>('Détection GPU...');
+  const [storySegments, setStorySegments] = useState<StorySegmentResponse[]>([]);
+  const [storyOverview, setStoryOverview] = useState<string>('');
+  const [storyTotalDuration, setStoryTotalDuration] = useState<number>(0);
+  const [isBreakingDownStory, setIsBreakingDownStory] = useState(false);
+  const [isGeneratingAllPlans, setIsGeneratingAllPlans] = useState(false);
+  const [storyInput, setStoryInput] = useState('');
   const [hostSystem, setHostSystem] = useState<{
     cpu: string;
     ram: string;
@@ -300,10 +311,17 @@ export const AgentsWorkspaceView: FC<AgentsWorkspaceViewProps> = ({
     setIsStreaming(false);
   };
 
-  const executeMediaGeneration = async (intent: MediaIntent) => {
+  const executeMediaGeneration = async (intent: MediaIntent): Promise<string | undefined> => {
     let taskId = `task-${Date.now()}`;
     const targetModelDef = models?.find((m) => m.id === intent.modelId);
     const modelName = targetModelDef?.name || intent.modelName;
+
+    const genParams: Partial<GenerationParameters> = {
+      seed: Math.floor(Math.random() * 1000000),
+      aspectRatio: '16:9',
+      resolution: '720p',
+      duration: intent.durationSec ? `${intent.durationSec}s` : '5s',
+    };
 
     try {
       if (onSubmitGeneration) {
@@ -311,6 +329,8 @@ export const AgentsWorkspaceView: FC<AgentsWorkspaceViewProps> = ({
           modelId: intent.modelId,
           prompt: intent.prompt,
           type: intent.type === 'mesh_3d' ? '3d' : intent.type,
+          parameters: genParams,
+          tags: intent.characterIds,
         });
         if (res?.taskId || res?.generationId) {
           taskId = res.taskId || res.generationId || taskId;
@@ -320,6 +340,8 @@ export const AgentsWorkspaceView: FC<AgentsWorkspaceViewProps> = ({
           modelId: intent.modelId,
           prompt: intent.prompt,
           type: intent.type === 'mesh_3d' ? '3d' : intent.type,
+          parameters: genParams,
+          tags: intent.characterIds,
         });
         taskId = res.taskId || res.generationId || taskId;
       }
@@ -360,9 +382,28 @@ export const AgentsWorkspaceView: FC<AgentsWorkspaceViewProps> = ({
                     progress: event.progress,
                     step: event.step,
                     outputUrl: event.outputUrl,
+                    thumbnailUrl: event.thumbnailUrl,
                     error: event.error,
                   }
                 : t
+            )
+          );
+
+          // Synchroniser le statut dans StoryboardTimeline si ce taskId correspond à un plan de séquence
+          setStorySegments((prev) =>
+            prev.map((s) =>
+              s.taskId === event.taskId
+                ? {
+                    ...s,
+                    status:
+                      event.status === 'completed'
+                        ? 'completed'
+                        : event.status === 'failed' || event.status === 'cancelled'
+                        ? 'failed'
+                        : 'running',
+                    outputUrl: event.outputUrl || s.outputUrl,
+                  }
+                : s
             )
           );
 
@@ -424,6 +465,7 @@ export const AgentsWorkspaceView: FC<AgentsWorkspaceViewProps> = ({
       );
 
       taskSubscriptionsRef.current.set(taskId, unsub);
+      return taskId;
     } catch (err) {
       console.error('Échec déclenchement inférence GPU:', err);
       setMessages((prev) => [
@@ -454,6 +496,12 @@ export const AgentsWorkspaceView: FC<AgentsWorkspaceViewProps> = ({
     const targetAgent = activeAgent;
     setMessages((prev) => [...prev, userMsg]);
     setChatInput('');
+
+    if (trimmed.startsWith('/story ') || trimmed.startsWith('/script ')) {
+      const storyPrompt = trimmed.replace(/^\/(?:story|script)\s+/i, '').trim();
+      void handleBreakdownStory(storyPrompt);
+      return;
+    }
 
     const mediaIntent = detectMediaIntent(trimmed);
     if (mediaIntent) {
@@ -590,6 +638,116 @@ export const AgentsWorkspaceView: FC<AgentsWorkspaceViewProps> = ({
       console.error('Failed to generate 3D mesh:', err);
     } finally {
       setIsGenerating3D(false);
+    }
+  };
+
+  const handleBreakdownStory = async (promptOverride?: string) => {
+    const textToBreak = (promptOverride || storyInput).trim();
+    if (!textToBreak) return;
+    setIsBreakingDownStory(true);
+    try {
+      const res = await apiClient.breakdownStory({ prompt: textToBreak, maxSegmentSec: 5.0 });
+      setStorySegments(res.segments);
+      setStoryOverview(res.sceneOverview);
+      setStoryTotalDuration(res.totalDurationSec);
+      setStoryInput('');
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `msg-${Date.now()}`,
+          sender: 'planner',
+          content: `🎬 Story Director : Découpage terminé en ${res.numSegments} plan(s) (${res.totalDurationSec}s). Ancres de personnages synchronisées.`,
+          timestamp: new Date().toLocaleTimeString(),
+          stage: 'STORY_BREAKDOWN',
+        },
+      ]);
+    } catch (err) {
+      console.error('Erreur découpage story:', err);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `msg-${Date.now()}`,
+          sender: 'planner',
+          content: '❌ Échec du découpage narratif : impossible de contacter le Story Director ou délai dépassé.',
+          timestamp: new Date().toLocaleTimeString(),
+          stage: 'ERROR',
+        },
+      ]);
+    } finally {
+      setIsBreakingDownStory(false);
+    }
+  };
+
+  const handleGeneratePlan = async (segment: StorySegmentResponse): Promise<string | undefined> => {
+    setStorySegments((prev) =>
+      prev.map((s) => (s.index === segment.index ? { ...s, status: 'running' } : s))
+    );
+    try {
+      const taskId = await executeMediaGeneration({
+        type: 'video',
+        modelId: 'minimax-h3',
+        modelName: 'MiniMax H3 Video',
+        prompt: segment.compiledPrompt,
+        durationSec: segment.durationSec,
+        characterIds: segment.characterIds,
+      });
+      if (taskId) {
+        setStorySegments((prev) =>
+          prev.map((s) => (s.index === segment.index ? { ...s, taskId, status: 'running' } : s))
+        );
+      }
+      return taskId;
+    } catch (err) {
+      setStorySegments((prev) =>
+        prev.map((s) => (s.index === segment.index ? { ...s, status: 'failed' } : s))
+      );
+      throw err;
+    }
+  };
+
+  const waitForTaskCompletion = (taskId: string, timeoutMs = 180000): Promise<TaskStatusEvent> => {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        unsub();
+        reject(new Error(`Délai d'attente dépassé pour la tâche ${taskId}`));
+      }, timeoutMs);
+
+      const unsub = apiClient.subscribeTaskStatus(
+        taskId,
+        (evt) => {
+          if (evt.status === 'completed' || evt.status === 'failed' || evt.status === 'cancelled') {
+            clearTimeout(timer);
+            unsub();
+            if (evt.status === 'completed') resolve(evt);
+            else reject(new Error(evt.error || `Tâche terminée avec statut ${evt.status}`));
+          }
+        },
+        (err) => {
+          clearTimeout(timer);
+          unsub();
+          reject(err);
+        }
+      );
+    });
+  };
+
+  const handleGenerateAllPlans = async () => {
+    if (isGeneratingAllPlans || storySegments.length === 0) return;
+    setIsGeneratingAllPlans(true);
+    try {
+      for (const segment of storySegments) {
+        const taskId = await handleGeneratePlan(segment);
+        if (taskId) {
+          try {
+            await waitForTaskCompletion(taskId);
+          } catch (planErr) {
+            console.warn('Plan terminé avec avertissement/erreur:', segment.index, planErr);
+          }
+        }
+      }
+    } finally {
+      setIsGeneratingAllPlans(false);
     }
   };
 
@@ -894,6 +1052,34 @@ export const AgentsWorkspaceView: FC<AgentsWorkspaceViewProps> = ({
                 <Box className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
                 <span>{isGenerating3D ? 'Génération 3D...' : 'Ajouter Calque 3D'}</span>
               </button>
+
+              {/* Barre de découpage Story Director */}
+              <div className="flex items-center space-x-1.5 pl-2 border-l border-studio-border">
+                <input
+                  type="text"
+                  value={storyInput}
+                  onChange={(e) => setStoryInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void handleBreakdownStory();
+                    }
+                  }}
+                  placeholder="Scénario narratif (@Astrid)..."
+                  className="w-48 px-2 py-1 text-xs rounded-lg bg-gray-100 dark:bg-gray-800 border border-studio-border text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+                <button
+                  type="button"
+                  data-testid="story-director-breakdown-btn"
+                  onClick={() => void handleBreakdownStory()}
+                  disabled={isBreakingDownStory || !storyInput.trim()}
+                  title="Découper la scène avec le Story Director"
+                  className="flex items-center space-x-1.5 px-2.5 py-1 text-xs font-medium rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900 transition-colors shadow-xs disabled:opacity-40"
+                >
+                  <Film className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                  <span>{isBreakingDownStory ? 'Découpage...' : 'Story Director'}</span>
+                </button>
+              </div>
             </div>
 
             <div className="flex items-center space-x-2 text-xs">
@@ -974,38 +1160,49 @@ export const AgentsWorkspaceView: FC<AgentsWorkspaceViewProps> = ({
             </div>
           </div>
 
-          {/* Séquenceur temporel en bas du canevas */}
-          <div className="h-28 border-t border-studio-border bg-white dark:bg-gray-900 flex flex-col z-10">
-            <div className="h-8 px-4 border-b border-studio-border flex items-center justify-between text-xs bg-gray-50/50 dark:bg-gray-800/30">
-              <div className="flex items-center space-x-2">
-                <button
-                  type="button"
-                  onClick={() => setIsPlaying(!isPlaying)}
-                  className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
-                >
-                  {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                </button>
-                <span className="font-mono text-[11px] text-gray-500">00:00:00 / 00:00:10</span>
+          {/* Storyboard Timeline ou Séquenceur temporel en bas du canevas */}
+          {storySegments.length > 0 ? (
+            <StoryboardTimeline
+              segments={storySegments}
+              totalDurationSec={storyTotalDuration}
+              sceneOverview={storyOverview}
+              onGeneratePlan={handleGeneratePlan}
+              onGenerateAllPlans={handleGenerateAllPlans}
+              isGeneratingAll={isGeneratingAllPlans}
+            />
+          ) : (
+            <div className="h-28 border-t border-studio-border bg-white dark:bg-gray-900 flex flex-col z-10">
+              <div className="h-8 px-4 border-b border-studio-border flex items-center justify-between text-xs bg-gray-50/50 dark:bg-gray-800/30">
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsPlaying(!isPlaying)}
+                    className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+                  >
+                    {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                  </button>
+                  <span className="font-mono text-[11px] text-gray-500">00:00:00 / 00:00:10</span>
+                </div>
+                <div className="flex items-center space-x-2 text-[11px] text-gray-500 font-mono">
+                  <span>30 FPS</span>
+                  <span>·</span>
+                  <span>1920x1080</span>
+                </div>
               </div>
-              <div className="flex items-center space-x-2 text-[11px] text-gray-500 font-mono">
-                <span>30 FPS</span>
-                <span>·</span>
-                <span>1920x1080</span>
-              </div>
-            </div>
 
-            {/* Pistes de montage vidéo / 3D */}
-            <div className="flex-1 p-2 space-y-1.5 overflow-x-auto bg-gray-50/30 dark:bg-gray-950/30">
-              <div className="h-6 rounded bg-indigo-100/50 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-800 flex items-center px-2 text-[10px] font-mono text-indigo-700 dark:text-indigo-300">
-                <span className="font-bold mr-2">Piste 1 (3D / Vidéo)</span>
-                <span className="text-gray-400">Plan_01_Cinematic_Establish.mp4</span>
-              </div>
-              <div className="h-6 rounded bg-purple-100/50 dark:bg-purple-950/50 border border-purple-200 dark:border-purple-800 flex items-center px-2 text-[10px] font-mono text-purple-700 dark:text-purple-300">
-                <span className="font-bold mr-2">Piste 2 (FX / Shaders)</span>
-                <span className="text-gray-400">Volumetric_Lighting_Pass.fx</span>
+              {/* Pistes de montage vidéo / 3D */}
+              <div className="flex-1 p-2 space-y-1.5 overflow-x-auto bg-gray-50/30 dark:bg-gray-950/30">
+                <div className="h-6 rounded bg-indigo-100/50 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-800 flex items-center px-2 text-[10px] font-mono text-indigo-700 dark:text-indigo-300">
+                  <span className="font-bold mr-2">Piste 1 (3D / Vidéo)</span>
+                  <span className="text-gray-400">Plan_01_Cinematic_Establish.mp4</span>
+                </div>
+                <div className="h-6 rounded bg-purple-100/50 dark:bg-purple-950/50 border border-purple-200 dark:border-purple-800 flex items-center px-2 text-[10px] font-mono text-purple-700 dark:text-purple-300">
+                  <span className="font-bold mr-2">Piste 2 (FX / Shaders)</span>
+                  <span className="text-gray-400">Volumetric_Lighting_Pass.fx</span>
+                </div>
               </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

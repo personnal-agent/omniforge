@@ -138,6 +138,20 @@ colab-ai-studio/
 4. **Pilule de Sélection de Moteur Hybride (`EngineSelectorPill`)** :
    - Choix direct entre `⚡ Local (RTX 5000 Ada)` (0s latence, ComfyUI local), `☁️ Cloud API` (serveur distant Colab/RunPod) et `🔀 Hybride` (storyboard et découpage de plans sur LLM Cloud + rendu haute fidélité local).
 
+### 3.5. Canevas Multi-Agents & Story Director (Storyboard & Chaînage Visuel)
+1. **Endpoint de Découpage Narratif (`POST /api/story-director/breakdown`)** :
+   - Analyse et décompose un scénario narratif complet en plans chronologiques successifs (`Plan 1`, `Plan 2`...).
+   - Résolution sémantique des personnages récurrents balisés (`@Astrid`, etc.) via `characters.json`.
+   - Injection automatique des ancres visuelles de continuité (`platinum braid`, `cyan glowing runes`, `silver winged armor`) et des règles temporelles inter-plans (*Shot 1: establishing shot*, *Shot 2+: camera motion cues & visual continuity*).
+2. **Timeline de Storyboard (`StoryboardTimeline.tsx`)** :
+   - Bandeau horizontal dynamique sous le canevas de composition `AgentsWorkspaceView`.
+   - Cartes de plans consécutifs avec badges de durée (5s), type de prise de vue (`Cinematic`, etc.), indicateurs de statut (`En attente`, `En cours GPU`, `Prêt`, `Échec`).
+   - Badges d'ancres visuelles par personnage pour contrôle de cohérence direct.
+   - Déclencheurs de rendu individuels par plan ou globaux séquentiels (`Lancer la séquence complète`).
+3. **Orchestration Hybride Swarm** :
+   - Commande directe via la barre d'outils du canevas ou les slash-commands de discussion (`/story <prompt>`, `/script <prompt>`).
+   - Journalisation et retour d'état en direct dans l'essaim multi-agents Hilo (Planner, Leader, Coder).
+
 ---
 
 ## 4. Contraintes Matérielles & Garde-fous d'Exécution

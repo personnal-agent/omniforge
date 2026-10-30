@@ -195,3 +195,44 @@ export interface TaskStatusEvent {
   step?: string; filePath?: string | null; outputUrl?: string; thumbnailUrl?: string; error?: string;
   generation?: Generation;
 }
+
+export interface StoryBreakdownRequest {
+  prompt: string;
+  totalDurationSec?: number | null;
+  maxSegmentSec?: number;
+  characterIds?: string[];
+}
+
+export interface StoryCharacterProfile {
+  id: string;
+  name: string;
+  label?: string;
+  description?: string;
+  physicalPrompt?: string;
+  archetype?: string | null;
+  visualAnchors?: string[];
+  voiceProfileId?: string | null;
+  voiceStyle?: string | null;
+}
+
+export interface StorySegmentResponse {
+  index: number;
+  durationSec: number;
+  actionPrompt: string;
+  shotType: string;
+  compiledPrompt: string;
+  characterIds: string[];
+  characterAnchors: StoryCharacterProfile[];
+  status?: 'pending' | 'running' | 'completed' | 'failed';
+  taskId?: string;
+  outputUrl?: string;
+}
+
+export interface StoryBreakdownResponse {
+  totalDurationSec: number;
+  numSegments: number;
+  sceneOverview: string;
+  segments: StorySegmentResponse[];
+  characters: StoryCharacterProfile[];
+}
+

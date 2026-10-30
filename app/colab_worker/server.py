@@ -791,7 +791,7 @@ def create_worker_app(
                 if cur_prog < target_max:
                     tasks[task_id]["progress"] = min(target_max, cur_prog + 1)
 
-                current_step = tasks[task_id].get("step", "")
+                current_step = str(tasks[task_id].get("step", "") or "")
                 if "Plan " not in current_step:
                     tasks[task_id]["step"] = (
                         f"Inférence GPU en cours ({tasks[task_id]['progress']}%)"

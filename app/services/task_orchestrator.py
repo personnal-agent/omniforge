@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import logging
 import time
@@ -178,7 +179,9 @@ class TaskOrchestrator:
                     directives_block = (
                         f"[Active Agent Directives:\n{chr(10).join(directives_lines)}]"
                     )
-                    compiled.prompt = f"{directives_block} {compiled.prompt}"
+                    compiled = dataclasses.replace(
+                        compiled, prompt=f"{directives_block} {compiled.prompt}"
+                    )
 
             # Routage Moteur Hybride (Local GPU RTX 5000 Ada vs Cloud API)
             pref = getattr(req.parameters, "enginePreference", None)

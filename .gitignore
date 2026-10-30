@@ -37,6 +37,7 @@ data/
 *.sqlite-wal
 *.sqlite-shm
 .hilo/
+scripts/cdp_*
 
 # Maquettes et captures de référence d'interface utilisateur (préservées sous Git)
 !ui-specifications/

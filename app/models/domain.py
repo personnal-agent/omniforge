@@ -51,7 +51,7 @@ class DomainBase(BaseModel):
 
 
 class GenerationParameters(DomainBase):
-    seed: int
+    seed: int = 0
     aspectRatio: str = "16:9"
     resolution: str = "720p"
     duration: str = "5s"
