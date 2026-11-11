@@ -1,6 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Copy, Check, Square, Terminal, Code2, Sparkles, ChevronDown, ChevronUp, Wand2, ShieldCheck } from 'lucide-react';
-import { LLM_PROMPT_PRESETS, getAutoDirectorEnabled, setAutoDirectorEnabled, type LlmPromptPreset } from './LlmPromptPresets';
+import React, { useState } from 'react';
+import { Copy, Check, Square, Terminal, Code2, Sparkles, ChevronDown, ChevronUp } from 'lucide-react';
 
 export interface ChatMessage {
   id: string;
@@ -12,7 +11,6 @@ export interface LlmChatViewProps {
   messages: ChatMessage[];
   isStreaming: boolean;
   onStopStreaming: () => void;
-  onSelectPromptPreset?: (presetText: string) => void;
   endpointUrl?: string;
   className?: string;
 }
@@ -23,35 +21,12 @@ export const LlmChatView: React.FC<LlmChatViewProps> = ({
   messages,
   isStreaming,
   onStopStreaming,
-  onSelectPromptPreset,
   endpointUrl = 'http://localhost:8000/v1/chat/completions',
   className = '',
 }) => {
   const [activeSnippet, setActiveSnippet] = useState<SnippetType>('curl');
   const [copied, setCopied] = useState(false);
   const [showApiBanner, setShowApiBanner] = useState(true);
-  const [autoDirector, setAutoDirector] = useState(false);
-  const [presetCopiedId, setPresetCopiedId] = useState<string | null>(null);
-
-  useEffect(() => {
-    setAutoDirector(getAutoDirectorEnabled());
-  }, []);
-
-  const handleToggleAutoDirector = () => {
-    const nextVal = !autoDirector;
-    setAutoDirector(nextVal);
-    setAutoDirectorEnabled(nextVal);
-  };
-
-  const handleApplyPreset = (preset: LlmPromptPreset) => {
-    if (onSelectPromptPreset) {
-      onSelectPromptPreset(preset.prompt);
-    } else {
-      navigator.clipboard.writeText(preset.prompt).catch(() => {});
-    }
-    setPresetCopiedId(preset.id);
-    setTimeout(() => setPresetCopiedId(null), 2500);
-  };
 
   const snippets: Record<SnippetType, string> = {
     curl: `curl ${endpointUrl} \\
@@ -167,58 +142,6 @@ response = client.chat.completions.create(
         )}
       </div>
 
-      {/* Raccourcis Master Prompts & Modes Spécialisés */}
-      <div className="bg-white/80 dark:bg-gray-900/80 rounded-2xl border border-indigo-100 dark:border-indigo-950/60 p-3 shadow-sm backdrop-blur-sm">
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center space-x-1.5 text-xs font-semibold text-gray-800 dark:text-gray-200">
-            <Wand2 className="w-3.5 h-3.5 text-indigo-600" />
-            <span>Master Prompts & Réalisateur Automatique</span>
-          </div>
-          <button
-            type="button"
-            onClick={handleToggleAutoDirector}
-            className={`flex items-center space-x-1 px-2.5 py-1 rounded-full text-[11px] font-medium transition-all ${
-              autoDirector
-                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30'
-                : 'bg-gray-100 dark:bg-gray-800 text-gray-500 hover:text-gray-700'
-            }`}
-            title="Activer automatiquement les directives de réalisateur pour chaque prompt"
-          >
-            <ShieldCheck className="w-3 h-3" />
-            <span>{autoDirector ? 'Mode Réalisateur Mémorisé (Actif)' : 'Mémoriser Mode Réalisateur'}</span>
-          </button>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-          {LLM_PROMPT_PRESETS.map((p) => {
-            const isApplied = presetCopiedId === p.id;
-            return (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => handleApplyPreset(p)}
-                className="group flex flex-col items-start p-2 rounded-xl text-left border border-gray-100 hover:border-indigo-300 dark:border-gray-800 dark:hover:border-indigo-700 bg-gray-50/60 hover:bg-indigo-50/40 dark:bg-gray-800/40 dark:hover:bg-indigo-950/30 transition-all text-xs"
-              >
-                <div className="flex items-center justify-between w-full">
-                  <span className="font-semibold text-gray-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 flex items-center gap-1">
-                    {p.title}
-                  </span>
-                  <span className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${
-                    isApplied
-                      ? 'bg-emerald-100 text-emerald-700 font-bold'
-                      : 'bg-indigo-50 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-300'
-                  }`}>
-                    {isApplied ? '✓ Appliqué !' : (p.badge || '1 Clic')}
-                  </span>
-                </div>
-                <span className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 line-clamp-1">
-                  {p.shortDesc}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
 
       {/* Messages History */}
       {messages.length > 0 && (

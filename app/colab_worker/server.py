@@ -72,8 +72,11 @@ def _model_spec(
             "durations": dur,
             "supportsNegativePrompt": neg,
             "supportsSeed": seed,
-            "supportsImageRef": img_ref,
-            "maxImageRefs": max_refs,
+            "supportsImageRef": True if mtype in ("lipsync", "lip_sync") else img_ref,
+            "maxImageRefs": 1 if mtype in ("lipsync", "lip_sync") else max_refs,
+            "supportsVideoRef": mtype in ("lipsync", "lip_sync"),
+            "maxVideoRefs": 1 if mtype in ("lipsync", "lip_sync") else 0,
+            "supportsAudio": mtype in ("lipsync", "lip_sync"),
             "supportsFirstFrame": supports_first_frame
             if mtype in ("video", "lipsync", "lip_sync")
             else False,
@@ -300,21 +303,7 @@ def _discover_local_models() -> list[dict[str, Any]]:
         )
     )
 
-    # 9. Lip Sync : LivePortrait Audio Avatar
-    local_models.append(
-        _model_spec(
-            "liveportrait",
-            "LivePortrait Audio Avatar",
-            "lipsync",
-            ["1:1", "16:9", "9:16", "4:3", "3:4"],
-            ["720p", "1080p"],
-            ["5s", "10s", "15s", "30s"],
-            badge="Local",
-            description="Animation portrait temps réel haute fidélité par audio (RTX 5000 Ada)",
-        )
-    )
-
-    # 10. Lip Sync : LatentSync Video Dubbing
+    # 9. Lip Sync : LatentSync Video Dubbing (Prioritaire pour doublage vidéo + portrait)
     local_models.append(
         _model_spec(
             "latentsync",
@@ -323,8 +312,26 @@ def _discover_local_models() -> list[dict[str, Any]]:
             ["16:9", "9:16", "1:1"],
             ["720p", "1080p"],
             ["5s", "10s", "15s"],
+            img_ref=True,
+            max_refs=1,
             badge="Local",
-            description="Synchronisation labiale cinéma sur vidéo existante (ByteDance)",
+            description="Synchronisation labiale cinéma sur vidéo ou portrait (RTX 5000 Ada)",
+        )
+    )
+
+    # 10. Lip Sync : LivePortrait Audio Avatar
+    local_models.append(
+        _model_spec(
+            "liveportrait",
+            "LivePortrait Audio Avatar",
+            "lipsync",
+            ["1:1", "16:9", "9:16", "4:3", "3:4"],
+            ["720p", "1080p"],
+            ["5s", "10s", "15s", "30s"],
+            img_ref=True,
+            max_refs=1,
+            badge="Local",
+            description="Animation portrait temps réel haute fidélité par audio (RTX 5000 Ada)",
         )
     )
 
@@ -649,34 +656,10 @@ def create_worker_app(
             return json.load(f)
 
     async def _extract_last_frame_ffmpeg(mp4_path: Path, output_png_path: Path) -> None:
-        """Extrait la dernière image d'un MP4 avec ffmpeg pour conditionner le plan I2V suivant."""
-        ffmpeg_bin = "/home/instructeur/.local/bin/ffmpeg"
-        bin_exists = await asyncio.to_thread(lambda: Path(ffmpeg_bin).exists())
-        if not bin_exists:
-            ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
-        cmd = [
-            str(ffmpeg_bin),
-            "-sseof",
-            "-0.1",
-            "-i",
-            str(mp4_path),
-            "-update",
-            "1",
-            "-q:v",
-            "2",
-            str(output_png_path),
-            "-y",
-        ]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await proc.communicate()
-        out_exists = await asyncio.to_thread(output_png_path.exists)
-        if proc.returncode != 0 or not out_exists:
-            err_msg = stderr.decode("utf-8", errors="ignore")
-            raise RuntimeError(f"Échec extraction dernière frame via ffmpeg: {err_msg}")
+        """Extrait la dernière image d'un MP4 pour conditionner le plan I2V suivant."""
+        from app.services.video_frames import extract_last_frame
+
+        await extract_last_frame(mp4_path, output_png_path)
 
     async def _submit_and_wait_comfyui(
         graph: dict[str, Any],
@@ -807,15 +790,10 @@ def create_worker_app(
         """Exécute une inférence réelle sur l'instance ComfyUI locale."""
         comfy_base = "http://127.0.0.1:8188"
         mid = (payload.modelId or "").lower()
-        is_video_task = (
-            (payload.type in {"video", "lipsync", "lip_sync"})
-            or any(
-                m["id"] == payload.modelId and m["type"] in {"video", "lipsync"}
-                for m in AVAILABLE_MODELS
-            )
-            or "minimax" in mid
-            or "noctq" in mid
-        )
+        from app.services.task_kind import is_video_task as _is_video_task
+        from app.services.task_kind import should_weave_audio
+
+        is_video_task = _is_video_task(payload.type, payload.modelId, AVAILABLE_MODELS)
 
         ratio = payload.parameters.get("aspectRatio", "16:9")
         ratio_map = {
@@ -1087,9 +1065,15 @@ def create_worker_app(
                 if p_i2v and p_i2v.is_file():
                     comfy_input_dir = Path("/home/instructeur/ComfyUI/input")
                     await asyncio.to_thread(comfy_input_dir.mkdir, parents=True, exist_ok=True)
-                    staged_i2v_img = f"i2v_in_{task_id}_{p_i2v.name}"
-                    dest_i2v = comfy_input_dir / staged_i2v_img
-                    await asyncio.to_thread(shutil.copy2, p_i2v, dest_i2v)
+                    if p_i2v.suffix.lower() in {".mp4", ".webm", ".mov", ".mkv"}:
+                        # Chaînage inter-plans : on part de la dernière image du plan précédent
+                        staged_i2v_img = f"i2v_chain_{task_id}.png"
+                        dest_i2v = comfy_input_dir / staged_i2v_img
+                        await _extract_last_frame_ffmpeg(p_i2v, dest_i2v)
+                    else:
+                        staged_i2v_img = f"i2v_in_{task_id}_{p_i2v.name}"
+                        dest_i2v = comfy_input_dir / staged_i2v_img
+                        await asyncio.to_thread(shutil.copy2, p_i2v, dest_i2v)
                     logger.info(
                         "Image de référence I2V injectée dans ComfyUI : %s -> %s",
                         p_i2v,
@@ -1221,7 +1205,7 @@ def create_worker_app(
             graph, comfy_base, task_id, cancel_event, prefix
         )
         await asyncio.to_thread(shutil.copy2, single_out, file_path)
-        if is_video_task and payload.parameters.get("autoVoiceOver", True):
+        if should_weave_audio(is_video_task, str(file_path), payload.parameters):
             with contextlib.suppress(Exception):
                 from app.services.audio_weaver import weave_audio_into_video_segment
 
@@ -1405,6 +1389,148 @@ def create_worker_app(
         tasks[task_id]["progress"] = 100
         tasks[task_id]["step"] = "Upscale image terminé avec succès"
 
+    async def _execute_lipsync_infer(
+        task_id: str,
+        payload: InferRequest,
+        file_path: Path,
+        cancel_event: asyncio.Event,
+    ) -> None:
+        """Exécute un doublage vidéo ou animation portrait Lip Sync (LatentSync / LivePortrait)."""
+        from app.services.lipsync_dubber import (
+            dub_video_with_audio_or_speech,
+            render_portrait_lipsync_video,
+        )
+
+        tasks[task_id]["status"] = "running"
+        tasks[task_id]["progress"] = 15
+        tasks[task_id]["step"] = "Analyse des pistes média (vidéo / portrait / voix)..."
+
+        def _locate_media(raw_val: str | None) -> Path | None:
+            if not raw_val or not isinstance(raw_val, str) or raw_val.startswith("blob:"):
+                return None
+            clean_val = raw_val.strip()
+            cands = [clean_val]
+            if "/api/uploads/" in clean_val:
+                cands.append(clean_val.split("/api/uploads/")[1].split("?")[0])
+            if "/api/generations/" in clean_val:
+                cands.append(clean_val.split("/api/generations/")[1].split("/")[0])
+                cands.append(clean_val.split("/api/generations/")[-1])
+
+            for cand in cands:
+                p = Path(cand).resolve()
+                if p.is_file():
+                    return p
+                fname = Path(cand).name
+                for s_dir in (
+                    Path("/mnt/c/wamp64/www/colab-ai-studio/data/uploads"),
+                    output_dir,
+                    Path("/home/instructeur/ComfyUI/output"),
+                    Path("/home/instructeur/ComfyUI/input"),
+                ):
+                    f_cand = s_dir / fname
+                    if f_cand.is_file():
+                        return f_cand
+                with contextlib.suppress(Exception):
+                    matches = list(
+                        Path("/mnt/c/wamp64/www/colab-ai-studio/outputs").rglob(
+                            f"{fname}*" if fname.startswith("gen_") and "." not in fname else fname
+                        )
+                    )
+                    for m in matches:
+                        if m.is_file() and m.suffix.lower() in {
+                            ".mp4",
+                            ".webm",
+                            ".mov",
+                            ".png",
+                            ".jpg",
+                            ".jpeg",
+                            ".webp",
+                            ".wav",
+                            ".mp3",
+                        }:
+                            return m
+            return None
+
+        vid_refs = payload.references.get("videoRefs") or []
+        img_refs = payload.references.get("imageRefs") or []
+        aud_refs = payload.references.get("audioRefs") or []
+        start_ref = payload.references.get("startFrame")
+
+        raw_visual = (
+            (vid_refs[0] if vid_refs else None)
+            or (img_refs[0] if img_refs else None)
+            or start_ref
+        )
+        raw_audio = aud_refs[0] if aud_refs else None
+
+        visual_file = await asyncio.to_thread(_locate_media, raw_visual)
+        audio_file = await asyncio.to_thread(_locate_media, raw_audio)
+
+        talking_style = str(payload.parameters.get("talkingStyle", "Stable"))
+        dur_raw = str(payload.parameters.get("duration", "5s")).replace("s", "")
+        try:
+            dur_val = float(dur_raw)
+        except ValueError:
+            dur_val = 5.0
+
+        is_visual_video = bool(
+            visual_file
+            and visual_file.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv", ".avi"}
+        )
+
+        if is_visual_video and visual_file is not None:
+            tasks[task_id]["progress"] = 45
+            tasks[task_id]["step"] = (
+                f"Synchronisation labiale LatentSync sur {visual_file.name}..."
+            )
+            await dub_video_with_audio_or_speech(
+                source_video=visual_file,
+                output_video=file_path,
+                prompt_text=payload.prompt,
+                audio_source=audio_file,
+                talking_style=talking_style,
+            )
+            tasks[task_id]["progress"] = 100
+            tasks[task_id]["step"] = "Doublage vidéo Lip Sync terminé avec succès"
+            return
+
+        comfy_ok = await _is_comfyui_available()
+        if comfy_ok:
+            tasks[task_id]["progress"] = 25
+            tasks[task_id]["step"] = "Animation faciale I2V et synchronisation vocale..."
+            await _execute_comfyui_infer(task_id, payload, file_path, cancel_event)
+            if cancel_event.is_set():
+                return
+            await dub_video_with_audio_or_speech(
+                source_video=file_path,
+                output_video=file_path,
+                prompt_text=payload.prompt,
+                audio_source=audio_file,
+                talking_style=talking_style,
+            )
+            tasks[task_id]["progress"] = 100
+            tasks[task_id]["step"] = "Animation portrait Lip Sync terminée avec succès"
+            return
+
+        if visual_file is not None and visual_file.is_file():
+            tasks[task_id]["progress"] = 50
+            tasks[task_id]["step"] = f"Animation portrait Lip Sync ({visual_file.name})..."
+            await render_portrait_lipsync_video(
+                source_image=visual_file,
+                output_video=file_path,
+                prompt_text=payload.prompt,
+                audio_source=audio_file,
+                talking_style=talking_style,
+                duration_sec=dur_val,
+            )
+            tasks[task_id]["progress"] = 100
+            tasks[task_id]["step"] = "Animation portrait Lip Sync terminée avec succès"
+            return
+
+        raise FileNotFoundError(
+            "Aucune vidéo ou image source valide trouvée pour la synchronisation labiale."
+        )
+
     async def _execute_inference_task(task_id: str, payload: InferRequest) -> None:
         """Exécute une tâche d'inférence en arrière-plan sous verrou GPU."""
         cancel_event = cancel_events[task_id]
@@ -1418,6 +1544,11 @@ def create_worker_app(
                 is_upscale = (
                     mtype == "upscale" or "upscale" in mid or "topaz" in mid or "esrgan" in mid
                 )
+                is_lipsync = mtype in {"lipsync", "lip_sync"} or mid in {
+                    "latentsync",
+                    "liveportrait",
+                    "wav2lip",
+                }
 
                 if is_upscale:
                     src_val = (
@@ -1482,6 +1613,8 @@ def create_worker_app(
                                 raise RuntimeError(f"Aucun fichier produit pour {payload.taskId}")
 
                         await asyncio.to_thread(_run_real_infer)
+                    elif is_lipsync:
+                        await _execute_lipsync_infer(task_id, payload, file_path, cancel_event)
                     else:
                         comfy_ok = await _is_comfyui_available()
                         comfy_keys = ("minimax", "noctq", "qwen", "flux", "wan", "cogvideo")

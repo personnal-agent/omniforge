@@ -183,6 +183,24 @@ export default function App(): React.ReactElement {
     });
   };
 
+  const handleLipSync = (gen: Generation) => {
+    setSelectedGeneration(null);
+    const sourceUrl = gen.filePath || `/api/generations/${gen.id}/file`;
+    const isVideoGen =
+      gen.mediaType === 'video' ||
+      gen.mediaType === 'lip_sync' ||
+      Boolean(gen.filePath?.toLowerCase().endsWith('.mp4'));
+    setRemixContext({
+      ...gen,
+      mediaType: 'lip_sync',
+      references: {
+        ...gen.references,
+        videoRefs: isVideoGen ? [sourceUrl] : [],
+        imageRefs: isVideoGen ? [] : [sourceUrl],
+      },
+    });
+  };
+
   const handleFavoriteToggled = (updated: Generation) => {
     setGenerations((prev) => prev.map((g) => (g.id === updated.id ? updated : g)));
     if (selectedGeneration && selectedGeneration.id === updated.id) {
@@ -411,6 +429,7 @@ export default function App(): React.ReactElement {
         onClose={() => setSelectedGeneration(null)}
         onRemix={handleRemix}
         onUpscale={handleUpscale}
+        onLipSync={handleLipSync}
         onFavoriteToggled={handleFavoriteToggled}
         onDelete={handleDeleteGeneration}
         onInjectToCanvas={handleInjectToCanvas}

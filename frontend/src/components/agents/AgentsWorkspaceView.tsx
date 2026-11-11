@@ -34,6 +34,7 @@ import { detectGraphicsCapability } from '../../services/graphicsCapability';
 import { Canvas2DFallback } from '../canvas/Canvas2DFallback';
 import { StoryboardTimeline } from '../canvas/StoryboardTimeline';
 import { apiClient } from '../../services/apiClient';
+import { buildChainedPlanOptions, pickSequenceSeed } from '../../services/storyChaining';
 
 interface AgentMessage {
   id: string;
@@ -50,6 +51,8 @@ export interface MediaIntent {
   prompt: string;
   durationSec?: number;
   characterIds?: string[];
+  seed?: number;
+  startFrameRef?: string;
 }
 
 function detectMediaIntent(text: string): MediaIntent | null {
@@ -317,11 +320,15 @@ export const AgentsWorkspaceView: FC<AgentsWorkspaceViewProps> = ({
     const modelName = targetModelDef?.name || intent.modelName;
 
     const genParams: Partial<GenerationParameters> = {
-      seed: Math.floor(Math.random() * 1000000),
+      seed: intent.seed ?? Math.floor(Math.random() * 1000000),
       aspectRatio: '16:9',
       resolution: '720p',
       duration: intent.durationSec ? `${intent.durationSec}s` : '5s',
     };
+
+    const genRefs = intent.startFrameRef
+      ? ({ startFrame: intent.startFrameRef } as GenerationSubmitRequest['references'])
+      : undefined;
 
     try {
       if (onSubmitGeneration) {
@@ -330,6 +337,7 @@ export const AgentsWorkspaceView: FC<AgentsWorkspaceViewProps> = ({
           prompt: intent.prompt,
           type: intent.type === 'mesh_3d' ? '3d' : intent.type,
           parameters: genParams,
+          references: genRefs,
           tags: intent.characterIds,
         });
         if (res?.taskId || res?.generationId) {
@@ -341,6 +349,7 @@ export const AgentsWorkspaceView: FC<AgentsWorkspaceViewProps> = ({
           prompt: intent.prompt,
           type: intent.type === 'mesh_3d' ? '3d' : intent.type,
           parameters: genParams,
+          references: genRefs,
           tags: intent.characterIds,
         });
         taskId = res.taskId || res.generationId || taskId;
@@ -679,7 +688,20 @@ export const AgentsWorkspaceView: FC<AgentsWorkspaceViewProps> = ({
     }
   };
 
-  const handleGeneratePlan = async (segment: StorySegmentResponse): Promise<string | undefined> => {
+  const sequenceSeedRef = useRef<number>(pickSequenceSeed());
+
+  const handleGeneratePlan = async (
+    segment: StorySegmentResponse,
+    prevTaskId?: string
+  ): Promise<string | undefined> => {
+    // Génération d'un plan isolé : on chaîne sur le plan précédent s'il est déjà terminé
+    const prevSegment = storySegments.find((s) => s.index === segment.index - 1);
+    const prevDone = prevSegment?.status === 'completed' && prevSegment.taskId ? prevSegment : undefined;
+    const chain = buildChainedPlanOptions(segment, {
+      seed: sequenceSeedRef.current,
+      prevTaskId: prevTaskId ?? prevDone?.taskId,
+      prevCharacterIds: prevSegment?.characterIds,
+    });
     setStorySegments((prev) =>
       prev.map((s) => (s.index === segment.index ? { ...s, status: 'running' } : s))
     );
@@ -691,6 +713,8 @@ export const AgentsWorkspaceView: FC<AgentsWorkspaceViewProps> = ({
         prompt: segment.compiledPrompt,
         durationSec: segment.durationSec,
         characterIds: segment.characterIds,
+        seed: chain.seed,
+        startFrameRef: chain.startFrameRef,
       });
       if (taskId) {
         setStorySegments((prev) =>
@@ -735,12 +759,16 @@ export const AgentsWorkspaceView: FC<AgentsWorkspaceViewProps> = ({
   const handleGenerateAllPlans = async () => {
     if (isGeneratingAllPlans || storySegments.length === 0) return;
     setIsGeneratingAllPlans(true);
+    sequenceSeedRef.current = pickSequenceSeed();
+    let prevTaskId: string | undefined;
     try {
       for (const segment of storySegments) {
-        const taskId = await handleGeneratePlan(segment);
+        const taskId = await handleGeneratePlan(segment, prevTaskId);
+        prevTaskId = undefined;
         if (taskId) {
           try {
             await waitForTaskCompletion(taskId);
+            prevTaskId = taskId;
           } catch (planErr) {
             console.warn('Plan terminé avec avertissement/erreur:', segment.index, planErr);
           }

@@ -35,8 +35,14 @@ from app.models.domain import (
     Project,
     StudioConfig,
     TaskStatus,
+    _utc_now_iso,
 )
 from app.services.brand_compiler import BrandContextCompiler
+from app.services.media_refs import (
+    extract_ingredient_refs,
+    is_image_path,
+    resolve_media_ref,
+)
 from app.services.worker_gateway import WorkerGateway
 from app.storage.json_store import JSONDocumentStore
 from app.storage.media_file_store_64k import MediaFileStore64k
@@ -141,21 +147,30 @@ class TaskOrchestrator:
                 ):
                     max_image_refs = 0
 
-            # Compilation des Fiches Personnages (@Nom) (Module B)
+            # Compilation des Fiches Personnages (@Nom) (Module B) et Ingrédients ([Video:gen_...])
             from app.api.routes_characters import compile_character_mentions
 
+            all_gens_for_ref = await self._json_store.read_list(GENERATIONS_FILE.name)
+            cleaned_prompt, ingredient_imgs, ingredient_vids = extract_ingredient_refs(
+                req.prompt, all_gens_for_ref
+            )
             chars_raw = await self._json_store.read_list(CHARACTERS_FILE.name)
             char_prompt, matched_char_ids, matched_char_imgs, char_seed = (
-                compile_character_mentions(req.prompt, chars_raw)
+                compile_character_mentions(cleaned_prompt or req.prompt, chars_raw)
             )
             if char_seed and (req.parameters.seed is None or req.parameters.seed <= 0):
                 req.parameters.seed = char_seed
+
+            merged_user_img_refs = list(req.references.imageRefs or [])
+            for ing_img in ingredient_imgs:
+                if ing_img not in merged_user_img_refs:
+                    merged_user_img_refs.append(ing_img)
 
             # Compilation du Brand Kit avec llm_config
             compiled = await self._compiler.compile(
                 prompt=char_prompt,
                 brand_kit=kit,
-                user_refs=req.references.imageRefs,
+                user_refs=merged_user_img_refs,
                 max_image_refs=max_image_refs,
                 llm_config=cfg.compilerLlm,
             )
@@ -220,33 +235,49 @@ class TaskOrchestrator:
             gen_id = f"gen_{uuid.uuid4().hex[:10]}"
             refs = req.references.model_copy()
             # Remplacement systématique de refs.imageRefs par le résultat compilé (même vide)
-            refs.imageRefs = compiled.image_refs
+            refs.imageRefs = [
+                resolve_media_ref(r, all_gens_for_ref, UPLOADS_DIR)
+                for r in compiled.image_refs
+                if r
+            ]
+            refs.videoRefs = [
+                resolve_media_ref(r, all_gens_for_ref, UPLOADS_DIR)
+                for r in (refs.videoRefs or [])
+                if r
+            ]
+            for ing_vid in ingredient_vids:
+                if ing_vid not in refs.videoRefs:
+                    refs.videoRefs.append(ing_vid)
+            refs.audioRefs = [
+                resolve_media_ref(r, all_gens_for_ref, UPLOADS_DIR)
+                for r in (refs.audioRefs or [])
+                if r
+            ]
+            # Chaînage inter-plans : startFrame = id/URL du plan précédent -> chemin disque.
+            # Le worker en extrait la dernière image pour conditionner le plan suivant (I2V).
+            if refs.startFrame:
+                refs.startFrame = resolve_media_ref(
+                    refs.startFrame, all_gens_for_ref, UPLOADS_DIR
+                )
+
             for c_img in matched_char_imgs:
-                if c_img and c_img not in refs.imageRefs and len(refs.imageRefs) < max_image_refs:
+                if not await asyncio.to_thread(is_image_path, c_img):
+                    if c_img:
+                        logger.warning(
+                            "Référence personnage ignorée (fichier absent ou non-image) : %s",
+                            c_img,
+                        )
+                    continue
+                if c_img not in refs.imageRefs and len(refs.imageRefs) < max_image_refs:
                     refs.imageRefs.append(c_img)
                 if c_img and not refs.startFrame and req.type == "video":
                     refs.startFrame = c_img
 
             # Résolution de la source d'upscaling
             if refs.upscaleSource:
-                src = refs.upscaleSource.strip()
-                gen_match_id = None
-                if "/api/generations/" in src and "/file" in src:
-                    gen_match_id = src.split("/api/generations/")[1].split("/")[0]
-                elif src.startswith("gen_") and len(src) <= 20:
-                    gen_match_id = src
-
-                if gen_match_id:
-                    all_gens = await self._json_store.read_list(GENERATIONS_FILE.name)
-                    found_gen = next((g for g in all_gens if g.get("id") == gen_match_id), None)
-                    if found_gen and found_gen.get("filePath"):
-                        refs.upscaleSource = found_gen["filePath"]
-                elif "/api/uploads/" in src:
-                    fn = src.split("/api/uploads/")[1]
-                    up_p = UPLOADS_DIR / fn
-                    is_f = await asyncio.to_thread(up_p.is_file)
-                    if is_f:
-                        refs.upscaleSource = str(up_p.resolve())
+                refs.upscaleSource = resolve_media_ref(
+                    refs.upscaleSource, all_gens_for_ref, UPLOADS_DIR
+                )
 
             seq_total = script_plan.num_segments if script_plan else None
             seq_idx = 1 if (seq_total and seq_total > 1) else None
@@ -341,6 +372,24 @@ class TaskOrchestrator:
                     await self._json_store.write_list_unlocked(GENERATIONS_FILE.name, gens)
                     return Generation.model_validate(g)
         return None
+
+    async def _link_character_sheet(self, gen: Generation, dest_file: Path) -> None:
+        """Associe la planche générée au personnage (uniquement si c'est une vraie image)."""
+        char_tag = next((t for t in (gen.tags or []) if t.startswith("char_")), None)
+        if not char_tag or not await asyncio.to_thread(is_image_path, str(dest_file)):
+            return
+        with contextlib.suppress(Exception):
+            chars = await self._json_store.read_list(CHARACTERS_FILE.name)
+            for c in chars:
+                if c.get("id") != char_tag:
+                    continue
+                c["referenceImagePath"] = str(dest_file)
+                if getattr(gen.parameters, "seed", None):
+                    c["defaultSeed"] = gen.parameters.seed
+                c["updatedAt"] = _utc_now_iso()
+                await self._json_store.write_list(CHARACTERS_FILE.name, chars)
+                logger.info("Planche liée au personnage %s: %s", char_tag, dest_file)
+                break
 
     async def _run_task(self, gen_id: str, req: GenerationCreateRequest, gen: Generation) -> None:
         """Cycle de vie asynchrone d'exécution de la tâche."""
@@ -705,6 +754,9 @@ class TaskOrchestrator:
                             if thumb_file:
                                 thumb_file.unlink(missing_ok=True)
                         break
+
+                    # Liaison automatique de la planche de référence au personnage
+                    await self._link_character_sheet(gen, dest_file)
 
                     await self._emit_event(
                         gen_id,

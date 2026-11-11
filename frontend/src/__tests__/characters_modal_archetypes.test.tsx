@@ -122,4 +122,28 @@ describe('CharactersModal - Google Flow Pro Alignment', () => {
       expect(apiClient.listCharacters).toHaveBeenCalledWith('The Professional');
     });
   });
+
+  it('triggers generateCharacterSheet when clicking planche reference button', async () => {
+    vi.spyOn(apiClient, 'generateCharacterSheet').mockResolvedValue({
+      taskId: 'gen-sheet-123',
+      characterId: 'char-1',
+      prompt: 'Character turnaround sheet',
+      seed: 555444,
+    });
+    vi.spyOn(apiClient, 'subscribeTaskStatus').mockReturnValue(() => {});
+
+    render(<CharactersModal isOpen={true} onClose={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('@Elena')).toBeInTheDocument();
+    });
+
+    const sheetBtns = screen.getAllByRole('button', { name: /Planche Réf|Regénérer/i });
+    expect(sheetBtns.length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(sheetBtns[0]);
+
+    await waitFor(() => {
+      expect(apiClient.generateCharacterSheet).toHaveBeenCalledWith('char-1');
+    });
+  });
 });

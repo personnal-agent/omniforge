@@ -12,6 +12,8 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Electron charge 5173 en dur : échouer plutôt que dériver silencieusement sur 5174.
+    strictPort: true,
     watch: {
       usePolling: true,
       interval: 200,

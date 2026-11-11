@@ -15,6 +15,7 @@ from app.models.domain import Character
 from app.services.story_director import (
     StoryDirector,
     build_chained_segment_prompt,
+    filter_active_character_profiles,
 )
 from app.storage.json_store import JSONDocumentStore
 
@@ -124,6 +125,7 @@ async def breakdown_story(
                     "id": c.id,
                     "label": c.name,
                     "name": c.name,
+                    "triggerToken": c.triggerToken,
                     "description": c.physicalPrompt,
                     "physicalPrompt": c.physicalPrompt,
                     "archetype": arch_val,
@@ -154,13 +156,16 @@ async def breakdown_story(
 
     for seg in plan.segments:
         # Trouver les personnages spécifiques à ce segment
-        seg_char_ids = [c["id"] for c in char_profiles]
+        active_seg_profiles = filter_active_character_profiles(
+            seg.action_prompt, char_profiles
+        )
+        seg_char_ids = [c["id"] for c in active_seg_profiles]
         seg_compiled = build_chained_segment_prompt(
             seg_idx=seg.index,
             total_segs=total_segs,
             action_prompt=seg.action_prompt,
             scene_overview=plan.scene_overview,
-            char_profiles=char_profiles,
+            char_profiles=active_seg_profiles,
         )
 
         segments_resp.append(
@@ -171,7 +176,7 @@ async def breakdown_story(
                 shotType=seg.shot_type,
                 compiledPrompt=seg_compiled,
                 characterIds=seg_char_ids,
-                characterAnchors=char_profiles,
+                characterAnchors=active_seg_profiles,
             )
         )
 

@@ -32,13 +32,18 @@ async function createWindow(): Promise<void> {
 
   const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
   const devUrl = process.env.VITE_DEV_SERVER_URL || 'http://127.0.0.1:5173';
+  const fastapiUrl = orchestrator.getEndpoints().fastapi;
   const prodPath = path.join(repoRoot, 'frontend', 'dist', 'index.html');
 
-  if (isDev) {
-    console.log(`[Electron] Chargement de l'URL de développement: ${devUrl}`);
+  const devReachable = isDev ? await orchestrator.probeHealth(devUrl) : false;
+  if (devReachable) {
+    console.log(`[Electron] Chargement du serveur Vite: ${devUrl}`);
     await mainWindow.loadURL(devUrl);
+  } else if (await orchestrator.probeHealth(`${fastapiUrl}/api/health`)) {
+    console.log(`[Electron] Chargement du bundle compilé via FastAPI: ${fastapiUrl}`);
+    await mainWindow.loadURL(fastapiUrl);
   } else {
-    console.log(`[Electron] Chargement du bundle de production: ${prodPath}`);
+    console.log(`[Electron] Chargement du bundle local: ${prodPath}`);
     await mainWindow.loadFile(prodPath);
   }
 

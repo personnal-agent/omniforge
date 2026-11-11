@@ -7,11 +7,13 @@ et la distribution des fichiers statiques de la SPA React.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.routes_agent_instructions import router as agent_instructions_router
 from app.api.routes_characters import router as characters_router
@@ -114,3 +116,20 @@ async def health_check(
         "host": get_host_system_metrics(),
         **worker_health,
     }
+
+
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if (_FRONTEND_DIST / "assets").is_dir():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(_FRONTEND_DIST / "assets")),
+        name="frontend_assets",
+    )
+
+
+@app.get("/", include_in_schema=False)
+async def serve_spa_index() -> Any:
+    index_file = _FRONTEND_DIST / "index.html"
+    if index_file.is_file():
+        return FileResponse(index_file, media_type="text/html")
+    return JSONResponse({"service": "Colab AI Studio Local Backend", "status": "healthy"})

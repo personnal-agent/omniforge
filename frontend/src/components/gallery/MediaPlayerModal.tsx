@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Camera, Check, Copy, Download, Folder, Layers, Sparkles, Star, Trash2, Volume2, X, Zap } from 'lucide-react';
+import { Camera, Check, Copy, Download, Folder, Layers, Mic, Sparkles, Star, Trash2, Volume2, X, Zap } from 'lucide-react';
 import { apiClient, getMediaFileUrl } from '../../services/apiClient';
 import type { CharacterAnchorData, Generation } from '../../types/studio';
 
@@ -10,13 +10,14 @@ export interface MediaPlayerModalProps {
   onClose: () => void;
   onRemix: (generation: Generation) => void;
   onUpscale?: (generation: Generation) => void;
+  onLipSync?: (generation: Generation) => void;
   onFavoriteToggled?: (generation: Generation) => void;
   onDelete?: (generation: Generation) => void;
   onInjectToCanvas?: (generation: Generation) => void;
 }
 
 export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
-  generation, isOpen, onClose, onRemix, onUpscale, onFavoriteToggled, onDelete, onInjectToCanvas,
+  generation, isOpen, onClose, onRemix, onUpscale, onLipSync, onFavoriteToggled, onDelete, onInjectToCanvas,
 }) => {
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [copiedPath, setCopiedPath] = useState(false);
@@ -282,6 +283,12 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                   <Sparkles className="w-4 h-4 text-amber-400" />
                   <span>Remix</span>
                 </button>
+                {onLipSync && (
+                  <button type="button" onClick={() => onLipSync(generation)} aria-label="Lip Sync" className="flex-1 h-10 rounded-full bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-sm">
+                    <Mic className="w-4 h-4 text-purple-200" />
+                    <span>Lip Sync</span>
+                  </button>
+                )}
                 {onUpscale && (
                   <button type="button" onClick={() => onUpscale(generation)} aria-label="Upscale 4K" className="flex-1 h-10 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors shadow-sm">
                     <Zap className="w-4 h-4 text-amber-300 fill-amber-300" />

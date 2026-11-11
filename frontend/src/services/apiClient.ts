@@ -108,6 +108,11 @@ export const apiClient = {
     request<Character>(`/api/characters/${id}`, { method: 'PUT', body: JSON.stringify(char) }),
   deleteCharacter: (id: string) =>
     request<{ deleted: boolean; id: string }>(`/api/characters/${id}`, { method: 'DELETE' }),
+  generateCharacterSheet: (characterId: string) =>
+    request<{ taskId: string; characterId: string; prompt: string; seed: number }>(
+      `/api/characters/${characterId}/generate-sheet`,
+      { method: 'POST' }
+    ),
   listAgentInstructions: () => request<AgentInstruction[]>('/api/agent-instructions'),
   createAgentInstruction: (inst: {
     title: string;

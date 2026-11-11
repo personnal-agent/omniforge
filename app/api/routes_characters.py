@@ -2,22 +2,40 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.api.routes_crud import get_json_store, verify_trusted_origin
 from app.config import CHARACTERS_FILE
-from app.models.domain import Character, CharacterArchetype, EnginePreference, _utc_now_iso
+from app.models.domain import (
+    Character,
+    CharacterArchetype,
+    EnginePreference,
+    GenerationParameters,
+    _utc_now_iso,
+)
+from app.services.task_orchestrator import GenerationCreateRequest
 from app.storage.json_store import JSONDocumentStore
+
+if TYPE_CHECKING:
+    from app.services.task_orchestrator import TaskOrchestrator
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["Characters"])
+
+
+def _get_task_orchestrator() -> TaskOrchestrator:
+    """Résolution paresseuse de TaskOrchestrator pour éviter les imports circulaires."""
+    from app.api.routes_generation import get_task_orchestrator
+
+    return get_task_orchestrator()
 
 
 class CharacterCreateRequest(BaseModel):
@@ -244,3 +262,62 @@ async def delete_character(
         await store.write_list_unlocked(CHARACTERS_FILE.name, rem)
 
     return {"deleted": True, "id": character_id}
+
+
+@router.post(
+    "/characters/{character_id}/generate-sheet",
+    response_model=dict[str, Any],
+    status_code=202,
+    dependencies=[Depends(verify_trusted_origin)],
+)
+async def generate_character_sheet(
+    character_id: str,
+    orchestrator: TaskOrchestrator = Depends(_get_task_orchestrator),
+    store: JSONDocumentStore = Depends(get_json_store),
+) -> dict[str, Any]:
+    """Génère une planche de référence (turnaround) NoctQ V4 pour ancrer l'identité visuelle."""
+    chars = await store.read_list(CHARACTERS_FILE.name)
+    char_dict = next((c for c in chars if c.get("id") == character_id), None)
+    if not char_dict:
+        raise HTTPException(status_code=404, detail="Personnage introuvable")
+
+    char = Character.model_validate(char_dict)
+    if char.defaultSeed and char.defaultSeed > 0:
+        char_seed = char.defaultSeed
+    else:
+        digest = hashlib.md5(char.id.encode(), usedforsecurity=False).hexdigest()
+        char_seed = int(digest[:8], 16) % 899999 + 100000
+
+    anchors_desc = (
+        ", ".join(char.visualAnchors) if char.visualAnchors else "distinctive facial features"
+    )
+    sheet_prompt = (
+        "Character model turnaround reference sheet, photorealistic concept art portrait "
+        f"of {char.name}. {char.physicalPrompt.strip()}. Distinctive visual anchors: "
+        f"{anchors_desc}. Multi-angle views: front-facing close up portrait, "
+        "three-quarter angle upper body, and full body view. Neutral studio background, "
+        "sharp photographic focus, identical facial features, exact hair style, "
+        "consistent costume details, balanced cinematic lighting, 8k resolution masterwork."
+    )
+
+    gen_req = GenerationCreateRequest(
+        modelId="noctq-v4",
+        prompt=sheet_prompt,
+        type="image",
+        parameters=GenerationParameters(
+            seed=char_seed,
+            aspectRatio="16:9",
+            resolution="1024x1024",
+            steps=25,
+        ),
+        tags=[char.id, "character_sheet"],
+    )
+
+    gen = await orchestrator.submit_generation(gen_req)
+
+    return {
+        "taskId": gen.id,
+        "characterId": char.id,
+        "prompt": sheet_prompt,
+        "seed": char_seed,
+    }

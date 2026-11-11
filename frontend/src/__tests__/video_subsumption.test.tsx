@@ -119,6 +119,35 @@ describe('ConditioningTray & Video Subsumption', () => {
     expect(screen.getByText(/voix/i)).toBeInTheDocument();
   });
 
+  it('naturally attaches a video file or portrait image in Lip Sync mode', () => {
+    let capturedRefs: GenerationReferences = {};
+    const ControlledLipSync = () => {
+      const [refs, setRefs] = useState<GenerationReferences>({});
+      capturedRefs = refs;
+      return (
+        <ConditioningTray
+          mode="lip_sync"
+          model={{ id: 'latentsync', name: 'LatentSync Video Dubbing', type: 'lip_sync' }}
+          references={refs}
+          onReferencesChange={setRefs}
+        />
+      );
+    };
+    render(<ControlledLipSync />);
+
+    const slots = screen.getAllByTestId('reference-slot-input');
+    expect(slots[0].getAttribute('accept')).toContain('video/*');
+
+    const videoFile = new File(['video-bytes'], 'plan1.mp4', { type: 'video/mp4' });
+    fireEvent.change(slots[0], { target: { files: [videoFile] } });
+
+    expect(capturedRefs.videoRefs).toEqual(['blob:mock/plan1.mp4']);
+    expect(capturedRefs.imageRefs).toEqual([]);
+    const videoElem = document.querySelector('video');
+    expect(videoElem).toBeInTheDocument();
+    expect(videoElem?.getAttribute('src')).toBe('blob:mock/plan1.mp4');
+  });
+
   it('renders Upscale mode with media source slot and preserves video preview', () => {
     const ControlledUpscale = () => {
       const [refs, setRefs] = useState<GenerationReferences>({});

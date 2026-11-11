@@ -24,8 +24,8 @@ export const ConditioningTray: React.FC<ConditioningTrayProps> = ({
   const supportsFirstFrame = mode === 'video' ? (caps?.supportsFirstFrame ?? true) : false;
   const supportsLastFrame = mode === 'video' ? (caps?.supportsLastFrame ?? true) : false;
   const supportsVideoRef = caps?.supportsVideoRef ?? true;
-  const maxImageRefs = caps?.maxImageRefs ?? 9;
-  const maxVideoRefs = caps?.maxVideoRefs ?? 1;
+  const maxImageRefs = mode === 'lip_sync' ? Math.max(1, caps?.maxImageRefs ?? 1) : (caps?.maxImageRefs ?? 9);
+  const maxVideoRefs = mode === 'lip_sync' ? Math.max(1, caps?.maxVideoRefs ?? 1) : (caps?.maxVideoRefs ?? 1);
 
   const imageRefs = references.imageRefs ?? [];
   const videoRefs = references.videoRefs ?? [];
@@ -120,10 +120,18 @@ export const ConditioningTray: React.FC<ConditioningTrayProps> = ({
         console.warn('Erreur téléversement média source:', e);
       });
     } else if (slotType === 'lipSyncImage') {
-      updateReferences({ ...latestRefsRef.current, imageRefs: [blobUrl] });
-      apiClient.uploadFile(file).then((res) => {
-        updateReferences({ ...latestRefsRef.current, imageRefs: [res.filePath] });
-      }).catch((e) => console.warn('Erreur téléversement lipSyncImage:', e));
+      const isVideo = file.type.startsWith('video/') || /\.(mp4|webm|mov|mkv|avi)$/i.test(file.name);
+      if (isVideo) {
+        updateReferences({ ...latestRefsRef.current, videoRefs: [blobUrl], imageRefs: [] });
+        apiClient.uploadFile(file).then((res) => {
+          updateReferences({ ...latestRefsRef.current, videoRefs: [res.filePath], imageRefs: [] });
+        }).catch((e) => console.warn('Erreur téléversement lipSyncVideo:', e));
+      } else {
+        updateReferences({ ...latestRefsRef.current, imageRefs: [blobUrl], videoRefs: [] });
+        apiClient.uploadFile(file).then((res) => {
+          updateReferences({ ...latestRefsRef.current, imageRefs: [res.filePath], videoRefs: [] });
+        }).catch((e) => console.warn('Erreur téléversement lipSyncImage:', e));
+      }
     } else if (slotType === 'lipSyncAudio') {
       updateReferences({ ...latestRefsRef.current, audioRefs: [blobUrl] });
       apiClient.uploadFile(file).then((res) => {
@@ -263,9 +271,13 @@ export const ConditioningTray: React.FC<ConditioningTrayProps> = ({
         {mode === 'lip_sync' && (
           <>
             <ReferenceSlot
-              label="Portrait source" fileUrl={imageRefs[0] || null} accept="image/*"
+              label="Vidéo / Portrait source"
+              fileUrl={videoRefs[0] || imageRefs[0] || null}
+              mediaType={videoRefs[0] ? 'video' : 'image'}
+              accept="video/*,image/*"
+              badge={videoRefs[0] ? 'Vidéo' : undefined}
               onFileSelected={(f: File) => handleFileSelect('lipSyncImage', f)}
-              onClear={() => updateReferences({ ...latestRefsRef.current, imageRefs: [] })}
+              onClear={() => updateReferences({ ...latestRefsRef.current, videoRefs: [], imageRefs: [] })}
             />
             <ReferenceSlot
               label="Voix / Audio vocal" mediaType="audio" fileUrl={references.audioRefs?.[0] || null} accept="audio/*"

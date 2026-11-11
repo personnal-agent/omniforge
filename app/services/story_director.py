@@ -164,6 +164,35 @@ def infer_scene_overview(
     )
 
 
+def filter_active_character_profiles(
+    action_prompt: str,
+    char_profiles: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Retourne les personnages mentionnés dans `action_prompt` (ou tous si aucun n'est nommé)."""
+    if not char_profiles:
+        return []
+    if not action_prompt or not action_prompt.strip():
+        return list(char_profiles)
+
+    matched: list[dict[str, Any]] = []
+    for c in char_profiles:
+        candidates: list[str] = []
+        for key in ("triggerToken", "name", "label"):
+            val = c.get(key)
+            if val and isinstance(val, str):
+                clean_val = val.strip().lstrip("@").strip()
+                if len(clean_val) >= 2 and clean_val.lower() not in {x.lower() for x in candidates}:
+                    candidates.append(clean_val)
+
+        if any(
+            re.search(rf"(?:@|\b){re.escape(cand)}\b", action_prompt, flags=re.IGNORECASE)
+            for cand in candidates
+        ):
+            matched.append(c)
+
+    return matched if matched else list(char_profiles)
+
+
 def build_chained_segment_prompt(
     seg_idx: int,
     total_segs: int,
@@ -183,10 +212,11 @@ def build_chained_segment_prompt(
         "matching physical action with consistent voice timbre, no abrupt audio cuts."
     )
 
+    active_profiles = filter_active_character_profiles(action_prompt, char_profiles)
     char_blocks = ""
-    if char_profiles:
+    if active_profiles:
         items = []
-        for c in char_profiles:
+        for c in active_profiles:
             lbl = c.get("label") or c.get("name") or "Personnage"
             desc = c.get("description") or c.get("physicalPrompt") or ""
             arch = c.get("archetype")
@@ -201,8 +231,8 @@ def build_chained_segment_prompt(
             items.append(line)
 
         continuity_notice = (
-            "Strictly maintain exact same faces, hairstyles, skin tones, body build, "
-            "and attire across all shots."
+            "Strictly maintain exact same faces, distinctive visual anchors, hairstyles, "
+            "skin tones, body build, and equipment/attire across all shots."
         )
         char_blocks = (
             f"\n[Character Identity Continuity Anchors:\n{chr(10).join(items)}"
@@ -224,7 +254,8 @@ def build_chained_segment_prompt(
         "The scene opens directly on <Picture 1>.",
         (
             "Strictly preserve the exact same character identities, facial features, "
-            "and setting from <Picture 1>."
+            "distinctive visual anchors, hairstyle, and equipment/attire from <Picture 1>, "
+            "while staging the environment and action of the current shot."
         ),
     ]
     if char_blocks:

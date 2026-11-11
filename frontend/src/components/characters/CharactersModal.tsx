@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
-  User, Plus, Trash2, X, Upload, Sparkles, Check, Mic, Cpu, Cloud, Shuffle, Tag,
+  User, Plus, Trash2, X, Upload, Sparkles, Check, Mic, Cpu, Cloud, Shuffle, Tag, Loader2,
 } from 'lucide-react';
 import { apiClient } from '../../services/apiClient';
 import type { Character, CharacterArchetype, EnginePreference } from '../../types/studio';
@@ -66,6 +66,36 @@ export const CharactersModal: React.FC<CharactersModalProps> = ({
       setIsCreating(false);
     }
   }, [isOpen, selectedArchetypeFilter]);
+
+  const [generatingSheetId, setGeneratingSheetId] = useState<string | null>(null);
+
+  const handleGenerateSheet = async (characterId: string) => {
+    try {
+      setGeneratingSheetId(characterId);
+      const res = await apiClient.generateCharacterSheet(characterId);
+      if (res.taskId) {
+        const unsub = apiClient.subscribeTaskStatus(
+          res.taskId,
+          (evt) => {
+            if (evt.status === 'completed' || evt.status === 'failed' || evt.status === 'cancelled') {
+              unsub();
+              setGeneratingSheetId(null);
+              fetchCharacters(selectedArchetypeFilter);
+            }
+          },
+          () => {
+            unsub();
+            setGeneratingSheetId(null);
+          }
+        );
+      } else {
+        setGeneratingSheetId(null);
+      }
+    } catch (err) {
+      console.error('Erreur génération planche:', err);
+      setGeneratingSheetId(null);
+    }
+  };
 
   const handleFilterClick = (archetypeId: string | null) => {
     setSelectedArchetypeFilter(archetypeId);
@@ -486,6 +516,32 @@ export const CharactersModal: React.FC<CharactersModalProps> = ({
                           </button>
                         </div>
 
+                        {/* Reference Image Preview */}
+                        {c.referenceImagePath && (
+                          <div className="relative mb-2.5 rounded-xl overflow-hidden border border-white/10 group bg-black/40">
+                            <img
+                              src={
+                                c.referenceImagePath.startsWith('http') || c.referenceImagePath.startsWith('/')
+                                  ? c.referenceImagePath
+                                  : `/files/${c.referenceImagePath.split('/').pop()}`
+                              }
+                              alt={c.name}
+                              className="w-full h-28 object-cover object-top transition-transform group-hover:scale-105"
+                              onError={(e) => {
+                                const target = e.currentTarget;
+                                const fname = c.referenceImagePath?.split('/').pop() || '';
+                                if (!target.src.includes('/api/uploads/')) {
+                                  target.src = `/api/uploads/${fname}`;
+                                }
+                              }}
+                            />
+                            <div className="absolute top-1.5 right-1.5 px-2 py-0.5 rounded-full bg-black/70 backdrop-blur-xs text-[9px] text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                              <Check className="w-2.5 h-2.5 text-emerald-400" />
+                              <span>Planche Active</span>
+                            </div>
+                          </div>
+                        )}
+
                         {/* Physical Prompt */}
                         <p className="text-[11px] text-neutral-300 line-clamp-2 leading-relaxed">
                           {c.physicalPrompt}
@@ -518,23 +574,44 @@ export const CharactersModal: React.FC<CharactersModalProps> = ({
                             </span>
                           )}
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => handleInsertToken(c.triggerToken)}
-                          className="px-2.5 py-1 rounded-full bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 border border-indigo-500/30 text-[11px] font-semibold flex items-center space-x-1 transition-colors"
-                        >
-                          {copiedToken === c.triggerToken ? (
-                            <>
-                              <Check className="w-3 h-3 text-emerald-400" />
-                              <span>Inséré !</span>
-                            </>
-                          ) : (
-                            <>
-                              <Plus className="w-3 h-3" />
-                              <span>Insérer</span>
-                            </>
-                          )}
-                        </button>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={generatingSheetId === c.id}
+                            onClick={() => handleGenerateSheet(c.id)}
+                            className="px-2.5 py-1 rounded-full bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/30 text-[11px] font-semibold flex items-center space-x-1 transition-colors"
+                            title="Générer une planche de référence multi-angles avec NoctQ V4 pour figer l'apparence"
+                          >
+                            {generatingSheetId === c.id ? (
+                              <>
+                                <Loader2 className="w-3 h-3 animate-spin text-indigo-400" />
+                                <span>Génération...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Sparkles className="w-3 h-3 text-indigo-400" />
+                                <span>{c.referenceImagePath ? 'Regénérer' : 'Planche Réf'}</span>
+                              </>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleInsertToken(c.triggerToken)}
+                            className="px-2.5 py-1 rounded-full bg-white/10 text-white hover:bg-white/20 border border-white/10 text-[11px] font-semibold flex items-center space-x-1 transition-colors"
+                          >
+                            {copiedToken === c.triggerToken ? (
+                              <>
+                                <Check className="w-3 h-3 text-emerald-400" />
+                                <span>Inséré !</span>
+                              </>
+                            ) : (
+                              <>
+                                <Plus className="w-3 h-3" />
+                                <span>Insérer</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
