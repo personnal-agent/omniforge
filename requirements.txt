@@ -3,7 +3,7 @@ fastapi>=0.143.3
 uvicorn>=0.54.0
 pydantic>=2.7
 httpx>=0.28.1
-python-multipart>=0.0.30
+python-multipart>=0.0.33
 psutil>=5.9
 # Tests
 pytest>=9.1.1
